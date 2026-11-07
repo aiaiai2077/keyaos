@@ -12,6 +12,7 @@ references/
 scripts/*
 !scripts/build-search-index.mjs
 !scripts/ensure-dev-vars.mjs
+!scripts/ensure-d1-database.mjs
 public/pagefind/
 *.log
 *.pid

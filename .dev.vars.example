@@ -15,8 +15,9 @@ ENCRYPTION_KEY=
 # STRIPE_WEBHOOK_SECRET=whsec_xxxxx
 
 # ─── Model Catalog Sync ──────────────────────────────────
-# By default the worker syncs model_catalog from keyaos.com every minute.
-# Set LOCAL_SYNC=1 to run local three-phase sync (requires system keys below).
+# By default the worker syncs model_catalog from keyaos.com every six hours,
+# falling back to provider APIs if the remote catalog is unavailable.
+# Set LOCAL_SYNC=1 to always run local three-phase sync (requires system keys below).
 # LOCAL_SYNC=1
 
 # ─── Provider System Keys (optional — only when LOCAL_SYNC=1) ──

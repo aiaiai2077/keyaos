@@ -5,10 +5,9 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ApiKeysDao } from "./core/db/api-keys-dao";
 import { CandleDao } from "./core/db/candle-dao";
 import {
-	syncAllModels,
 	syncAutoCredits,
 	syncCredentialHealth,
-	syncFromRemote,
+	syncModels,
 } from "./core/sync/sync-service";
 import { sweepAutoTopUp } from "./platform/billing/auto-topup-service";
 import adminRouter from "./platform/routes/admin";
@@ -262,11 +261,7 @@ export default {
 				: event.cron === "0 */6 * * *"
 					? (async () => {
 							try {
-								if (env.LOCAL_SYNC) {
-									await syncAllModels(env.DB, rate, env);
-								} else {
-									await syncFromRemote(env.DB);
-								}
+								await syncModels(env.DB, rate, env);
 							} catch (error) {
 								log.error("sync", "Scheduled model catalog sync failed", {
 									error: error instanceof Error ? error.message : String(error),

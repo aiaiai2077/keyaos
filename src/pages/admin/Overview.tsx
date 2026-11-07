@@ -289,6 +289,7 @@ function SyncButton({ label, endpoint }: { label: string; endpoint: string }) {
 		"idle",
 	);
 	const [elapsed, setElapsed] = useState(0);
+	const [modelsSynced, setModelsSynced] = useState<number | null>(null);
 
 	const run = useCallback(async () => {
 		setState("loading");
@@ -299,8 +300,12 @@ function SyncButton({ label, endpoint }: { label: string; endpoint: string }) {
 				headers: { Authorization: `Bearer ${token}` },
 			});
 			if (!res.ok) throw new Error(`${res.status}`);
-			const json = (await res.json()) as { elapsed?: number };
+			const json = (await res.json()) as {
+				elapsed?: number;
+				modelsSynced?: number;
+			};
 			setElapsed(json.elapsed ?? 0);
+			setModelsSynced(json.modelsSynced ?? null);
 			setState("done");
 			setTimeout(() => setState("idle"), 3000);
 		} catch {
@@ -322,7 +327,9 @@ function SyncButton({ label, endpoint }: { label: string; endpoint: string }) {
 			{state === "loading"
 				? "Syncing…"
 				: state === "done"
-					? `✓ ${elapsed}ms`
+					? modelsSynced == null
+						? `✓ ${elapsed}ms`
+						: `✓ ${modelsSynced} models`
 					: state === "error"
 						? "✗ Failed"
 						: label}

@@ -28,21 +28,21 @@ export async function syncAllModels(
 	db: D1Database,
 	cnyUsdRate = 7,
 	env?: Env,
-): Promise<void> {
+): Promise<number> {
 	const dao = new CatalogDao(db);
 	const allProviders = getAllProviders();
 
 	// ─── Phase 1: Sync OpenRouter chat models (canonical catalog) ───
 	const orProvider = allProviders.find((p) => p.info.id === "openrouter");
 	if (!orProvider) {
-		log.error("sync", "OpenRouter provider not found in registry");
-		return;
+		throw new Error("OpenRouter provider not found in registry");
 	}
 
 	const orModels = await orProvider.fetchModels(cnyUsdRate);
 	if (orModels.length === 0) {
-		log.warn("sync", "OpenRouter returned 0 models, aborting entire sync");
-		return;
+		throw new Error(
+			"OpenRouter returned no models; the existing catalog was left unchanged",
+		);
 	}
 
 	await dao.upsert(orModels);
@@ -109,6 +109,7 @@ export async function syncAllModels(
 
 	// ─── Phase 3: Sync other providers, filtering to allowlist ──
 	const otherProviders = allProviders.filter((p) => p.info.id !== "openrouter");
+	let syncedProviderModels = 0;
 	const results = await Promise.allSettled(
 		otherProviders.map(async (provider) => {
 			const systemKey =
@@ -122,7 +123,7 @@ export async function syncAllModels(
 				log.warn("sync", "0 models, skipping", {
 					provider_id: provider.info.id,
 				});
-				return;
+				return 0;
 			}
 
 			const filtered = models.filter((m) => allowedModelIds.has(m.model_id));
@@ -131,7 +132,7 @@ export async function syncAllModels(
 					provider_id: provider.info.id,
 					total: models.length,
 				});
-				return;
+				return 0;
 			}
 
 			for (const m of filtered) {
@@ -162,16 +163,22 @@ export async function syncAllModels(
 				kept: filtered.length,
 				filtered: models.length - filtered.length,
 			});
+			return filtered.length;
 		}),
 	);
 
 	for (const r of results) {
-		if (r.status === "rejected") {
+		if (r.status === "fulfilled") {
+			syncedProviderModels += r.value;
+		} else {
 			log.error("sync", "Provider failed", {
 				error: r.reason instanceof Error ? r.reason.message : String(r.reason),
 			});
 		}
 	}
+	const syncedModels = allOrModels.length + syncedProviderModels;
+	log.info("sync", "Local model catalog sync completed", { syncedModels });
+	return syncedModels;
 }
 
 const CATALOG_URL = "https://keyaos.com/api/catalog";
@@ -181,7 +188,7 @@ const CATALOG_URL = "https://keyaos.com/api/catalog";
  * and replicate it into the local DB.
  * On any failure, the local DB is left unchanged.
  */
-export async function syncFromRemote(db: D1Database): Promise<void> {
+export async function syncFromRemote(db: D1Database): Promise<number> {
 	let res: Response;
 	try {
 		const catalogUrl = new URL(CATALOG_URL);
@@ -227,6 +234,24 @@ export async function syncFromRemote(db: D1Database): Promise<void> {
 		entries: entries.length,
 		providers: byProvider.size,
 	});
+	return entries.length;
+}
+
+export async function syncModels(
+	db: D1Database,
+	cnyUsdRate = 7,
+	env?: Env,
+): Promise<number> {
+	if (env?.LOCAL_SYNC) return syncAllModels(db, cnyUsdRate, env);
+
+	try {
+		return await syncFromRemote(db);
+	} catch (error) {
+		log.warn("sync", "Remote catalog unavailable; trying provider APIs", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return syncAllModels(db, cnyUsdRate, env);
+	}
 }
 
 export async function syncAutoCredits(

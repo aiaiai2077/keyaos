@@ -70,7 +70,7 @@ flowchart LR
     Sync -.-> Router
 ```
 
-**Request flow:** Client sends a request to any supported endpoint. Auth validates the API key and checks permissions (model restrictions, quota, expiry, IP). The router ranks all available credentials by `unit_price × multiplier` and picks the cheapest healthy one. The circuit breaker skips providers with recent failures. The SSE interceptor tee's the response stream — forwarding it to the client in real time while extracting usage data for billing in the background. Cron jobs sync model availability and pricing every minute and check credential health daily at 00:00 UTC.
+**Request flow:** Client sends a request to any supported endpoint. Auth validates the API key and checks permissions (model restrictions, quota, expiry, IP). The router ranks all available credentials by `unit_price × multiplier` and picks the cheapest healthy one. The circuit breaker skips providers with recent failures. The SSE interceptor tee's the response stream — forwarding it to the client in real time while extracting usage data for billing in the background. Cron jobs sync the model catalog every six hours (falling back to provider APIs if the remote catalog is unavailable) and check credential health daily at 00:00 UTC.
 
 ## ✨ Features
 
@@ -112,9 +112,8 @@ They must live in the **Build** tab (read by `vite build`), not the Worker runti
 ```bash
 pnpm install
 npx wrangler login
-npx wrangler d1 create keyaos-db    # update database_id in wrangler.toml
 npx wrangler secret put ADMIN_TOKEN
-pnpm deploy                          # builds, applies migrations, deploys
+pnpm deploy                          # creates/binds D1 once, then reuses it on later deploys
 ```
 
 ### 💻 Local Development
@@ -224,7 +223,7 @@ Keyaos ships with a full frontend built with React 19, Vite 7, and Tailwind CSS 
 |-------|-----------|
 | Runtime | Cloudflare Workers |
 | Database | Cloudflare D1 (SQLite) |
-| Scheduler | Cron Triggers (every minute) |
+| Scheduler | Cron Triggers (minute metrics, 6-hour model sync, daily health check) |
 | Frontend | React 19 · Vite 7 · Tailwind CSS 4 |
 | UI | Radix UI · Headless UI · Framer Motion |
 | Backend | Hono 4 · TypeScript |

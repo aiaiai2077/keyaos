@@ -70,7 +70,7 @@ flowchart LR
     Sync -.-> Router
 ```
 
-**请求流程：** 客户端向任一端点发起请求。Auth 校验 API Key 并检查权限（模型限制、配额、到期时间、IP）。路由器按 `单价 × 倍率` 对所有凭证排序，选出最便宜的健康选项。熔断器跳过近期故障的服务商。SSE 拦截器对响应流做 tee — 实时转发给客户端的同时，在后台提取用量数据用于计费。Cron 任务每分钟同步模型可用性和价格，并每天 00:00 UTC 检查凭证健康状态。
+**请求流程：** 客户端向任一端点发起请求。Auth 校验 API Key 并检查权限（模型限制、配额、到期时间、IP）。路由器按 `单价 × 倍率` 对所有凭证排序，选出最便宜的健康选项。熔断器跳过近期故障的服务商。SSE 拦截器对响应流做 tee — 实时转发给客户端的同时，在后台提取用量数据用于计费。Cron 任务每 6 小时同步模型目录（远端目录不可用时回退到服务商 API），并每天 00:00 UTC 检查凭证健康状态。
 
 ## ✨ 功能特性
 
@@ -112,9 +112,8 @@ npx wrangler secret put ADMIN_TOKEN
 ```bash
 pnpm install
 npx wrangler login
-npx wrangler d1 create keyaos-db    # 将 database_id 填入 wrangler.toml
 npx wrangler secret put ADMIN_TOKEN
-pnpm deploy                          # 构建、执行迁移、部署
+pnpm deploy                          # 首次自动创建/绑定 D1，之后复用同一数据库
 ```
 
 ### 💻 本地开发
@@ -224,7 +223,7 @@ Keyaos 内置了完整的前端，基于 React 19、Vite 7 和 Tailwind CSS 4 �
 |------|------|
 | 运行时 | Cloudflare Workers |
 | 数据库 | Cloudflare D1（SQLite）|
-| 定时任务 | Cron Triggers（每分钟、每 6 小时及每日健康检查）|
+| 定时任务 | Cron Triggers（每分钟统计、每 6 小时同步模型、每日健康检查）|
 | 前端 | React 19 · Vite 7 · Tailwind CSS 4 |
 | UI 组件 | Radix UI · Headless UI · Framer Motion |
 | 后端 | Hono 4 · TypeScript |

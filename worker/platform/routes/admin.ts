@@ -1,10 +1,6 @@
 import { Hono } from "hono";
 import { CandleDao } from "../../core/db/candle-dao";
-import {
-	syncAllModels,
-	syncAutoCredits,
-	syncFromRemote,
-} from "../../core/sync/sync-service";
+import { syncAutoCredits, syncModels } from "../../core/sync/sync-service";
 import { purgePublicCaches } from "../../shared/cache";
 import { briefHint, decrypt, mask } from "../../shared/crypto";
 import { BadRequestError } from "../../shared/errors";
@@ -163,17 +159,14 @@ admin.post("/sync-models", async (c) => {
 	const rate = Number.parseFloat(c.env.CNY_USD_RATE || "7");
 	const start = Date.now();
 
-	if (c.env.LOCAL_SYNC) {
-		await syncAllModels(c.env.DB, rate, c.env);
-	} else {
-		await syncFromRemote(c.env.DB);
-	}
+	const modelsSynced = await syncModels(c.env.DB, rate, c.env);
 
 	await syncAutoCredits(c.env.DB, c.env.ENCRYPTION_KEY, rate);
 	const origin = new URL(c.req.url).origin;
 	const purged = await purgePublicCaches(origin);
 	return c.json({
 		message: "Models synced",
+		modelsSynced,
 		purged,
 		elapsed: Date.now() - start,
 	});
