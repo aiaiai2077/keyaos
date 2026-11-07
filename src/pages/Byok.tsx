@@ -268,8 +268,8 @@ export function Byok() {
 				: undefined;
 			const priceMultiplier = Number.parseFloat(draft.priceMultiplier) || 1.0;
 
-			for (let i = 0; i < uniqueEntries.length; i += 8) {
-				const chunk = uniqueEntries.slice(i, i + 8);
+			for (let i = 0; i < uniqueEntries.length; i += 1) {
+				const chunk = uniqueEntries.slice(i, i + 1);
 				const results = await Promise.all(
 					chunk.map(async (entry) => {
 						if (secretPattern && !secretPattern.test(entry.secret)) {
@@ -337,6 +337,9 @@ export function Byok() {
 						Math.min(i + chunk.length, uniqueEntries.length),
 					total: entries.length,
 				});
+				if (i + chunk.length < uniqueEntries.length) {
+					await new Promise((resolve) => setTimeout(resolve, 250));
+				}
 			}
 
 			if (imported > 0) refetch();

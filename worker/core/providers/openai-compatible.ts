@@ -65,6 +65,49 @@ function defaultParseModels(
 		}));
 }
 
+function getRetryDelay(
+	response: Response | undefined,
+	attempt: number,
+): number {
+	const retryAfter = response?.headers.get("Retry-After");
+	if (retryAfter) {
+		const seconds = Number(retryAfter);
+		const delay = Number.isNaN(seconds)
+			? Date.parse(retryAfter) - Date.now()
+			: seconds * 1000;
+		if (Number.isFinite(delay) && delay > 0) return Math.min(delay, 30_000);
+	}
+	return 500 * 2 ** attempt;
+}
+
+async function fetchForValidation(
+	url: string,
+	init: RequestInit,
+): Promise<Response> {
+	let lastResponse: Response | undefined;
+	for (let attempt = 0; attempt < 4; attempt += 1) {
+		try {
+			lastResponse = await fetch(url, init);
+			if (
+				lastResponse.ok ||
+				(lastResponse.status !== 429 && lastResponse.status < 500)
+			) {
+				return lastResponse;
+			}
+		} catch {
+			if (attempt === 3) throw new Error("Provider validation request failed");
+		}
+
+		if (attempt < 3) {
+			await new Promise((resolve) =>
+				setTimeout(resolve, getRetryDelay(lastResponse, attempt)),
+			);
+		}
+	}
+	if (!lastResponse) throw new Error("Provider validation request failed");
+	return lastResponse;
+}
+
 export class OpenAICompatibleAdapter implements ProviderAdapter {
 	info: ProviderInfo;
 	systemKeyEnvVar?: string;
@@ -88,7 +131,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 			return this.config.customValidateKey(secret);
 		try {
 			const url = this.config.validationUrl || `${this.config.baseUrl}/models`;
-			const res = await fetch(url, {
+			const res = await fetchForValidation(url, {
 				headers: {
 					Authorization: `Bearer ${secret}`,
 					...this.config.extraHeaders,
