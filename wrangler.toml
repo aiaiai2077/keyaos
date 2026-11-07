@@ -22,7 +22,6 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "keyaos-db"
-database_id = "64398ff2-ca2d-4896-93ab-b001f46c26c3"
 migrations_dir = "migrations"
 
 [observability]
