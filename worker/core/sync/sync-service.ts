@@ -31,6 +31,95 @@ export async function syncAllModels(
 ): Promise<number> {
 	const dao = new CatalogDao(db);
 	const allProviders = getAllProviders();
+	const credentialsDao = env?.ENCRYPTION_KEY
+		? new CredentialsDao(db, env.ENCRYPTION_KEY)
+		: null;
+	const credentials = credentialsDao
+		? (await credentialsDao.getGlobal()).filter(
+				(credential) => credential.is_enabled === 1,
+			)
+		: [];
+
+	const fetchProviderModels = async (
+		provider: (typeof allProviders)[number],
+	): Promise<ParsedModel[]> => {
+		const systemKey =
+			provider.systemKeyEnvVar && env
+				? (env as unknown as Record<string, string | undefined>)[
+						provider.systemKeyEnvVar
+					]
+				: undefined;
+		const providerCredentials = credentials
+			.filter((credential) => credential.provider_id === provider.info.id)
+			.sort((a, b) => {
+				const healthOrder: Record<string, number> = {
+					ok: 0,
+					degraded: 1,
+					cooldown: 2,
+					dead: 3,
+				};
+				return (
+					(healthOrder[a.health_status] ?? 4) -
+					(healthOrder[b.health_status] ?? 4)
+				);
+			});
+
+		if (systemKey) {
+			try {
+				const models = await provider.fetchModels(cnyUsdRate, systemKey);
+				if (models.length > 0) return models;
+			} catch (error) {
+				log.warn("sync", "System-key model fetch failed", {
+					provider_id: provider.info.id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		if (!systemKey) {
+			try {
+				const models = await provider.fetchModels(cnyUsdRate);
+				if (models.length > 0) return models;
+			} catch (error) {
+				log.warn("sync", "Public model fetch failed", {
+					provider_id: provider.info.id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		let credentialAttempts = 0;
+		for (const credential of providerCredentials) {
+			try {
+				const secret = await credentialsDao?.decryptSecret(credential);
+				if (!secret) continue;
+				credentialAttempts++;
+				const models = await provider.fetchModels(cnyUsdRate, secret);
+				if (models.length > 0) {
+					log.info("sync", "Models fetched using stored credential", {
+						provider_id: provider.info.id,
+						models: models.length,
+						credential_attempts: credentialAttempts,
+					});
+					return models;
+				}
+			} catch (error) {
+				log.warn("sync", "Stored-credential model fetch failed", {
+					provider_id: provider.info.id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		if (credentialAttempts > 0) {
+			log.warn("sync", "No models returned by stored credentials", {
+				provider_id: provider.info.id,
+				credential_attempts: credentialAttempts,
+			});
+		}
+
+		return [];
+	};
 
 	// ─── Phase 1: Sync OpenRouter chat models (canonical catalog) ───
 	const orProvider = allProviders.find((p) => p.info.id === "openrouter");
@@ -38,7 +127,7 @@ export async function syncAllModels(
 		throw new Error("OpenRouter provider not found in registry");
 	}
 
-	const orModels = await orProvider.fetchModels(cnyUsdRate);
+	const orModels = await fetchProviderModels(orProvider);
 	if (orModels.length === 0) {
 		throw new Error(
 			"OpenRouter returned no models; the existing catalog was left unchanged",
@@ -112,13 +201,7 @@ export async function syncAllModels(
 	let syncedProviderModels = 0;
 	const results = await Promise.allSettled(
 		otherProviders.map(async (provider) => {
-			const systemKey =
-				provider.systemKeyEnvVar && env
-					? (env as unknown as Record<string, string | undefined>)[
-							provider.systemKeyEnvVar
-						]
-					: undefined;
-			const models = await provider.fetchModels(cnyUsdRate, systemKey);
+			const models = await fetchProviderModels(provider);
 			if (models.length === 0) {
 				log.warn("sync", "0 models, skipping", {
 					provider_id: provider.info.id,
@@ -245,12 +328,12 @@ export async function syncModels(
 	if (env?.LOCAL_SYNC) return syncAllModels(db, cnyUsdRate, env);
 
 	try {
-		return await syncFromRemote(db);
+		return await syncAllModels(db, cnyUsdRate, env);
 	} catch (error) {
-		log.warn("sync", "Remote catalog unavailable; trying provider APIs", {
+		log.warn("sync", "Provider API sync failed; trying remote catalog", {
 			error: error instanceof Error ? error.message : String(error),
 		});
-		return syncAllModels(db, cnyUsdRate, env);
+		return syncFromRemote(db);
 	}
 }
 

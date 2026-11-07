@@ -191,7 +191,9 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
 		const url = this.config.modelsUrl || `${this.config.baseUrl}/models`;
 		try {
-			const res = await fetch(url);
+			const headers = new Headers(this.config.extraHeaders);
+			if (systemKey) headers.set("Authorization", `Bearer ${systemKey}`);
+			const res = await fetch(url, { headers });
 			if (!res.ok) return [];
 			const raw = (await res.json()) as Record<string, unknown>;
 			if (this.config.parseModels) {

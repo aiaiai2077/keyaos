@@ -413,6 +413,10 @@ export function Overview() {
 				</div>
 				<div className="flex items-center gap-2">
 					<SyncButton label="Sync Models" endpoint="/api/admin/sync-models" />
+					<SyncButton
+						label="Sync Upstream"
+						endpoint="/api/admin/sync-upstream-models"
+					/>
 					<SyncButton label="Sync Candles" endpoint="/api/admin/sync-candles" />
 					<IconButton label="Refresh" size="md" onClick={refetch}>
 						<ArrowPathIcon />
