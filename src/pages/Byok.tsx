@@ -206,6 +206,8 @@ export function Byok() {
 		const tid = toast.loading(t("common.loading"));
 		const failures: typeof entries = [];
 		let imported = 0;
+		const secretPattern =
+			guide?.secretPattern && !isOAuth ? new RegExp(guide.secretPattern) : null;
 
 		try {
 			const headers = await getHeaders();
@@ -218,6 +220,10 @@ export function Byok() {
 				const chunk = entries.slice(i, i + 8);
 				const results = await Promise.all(
 					chunk.map(async (entry) => {
+						if (secretPattern && !secretPattern.test(entry.secret)) {
+							return { entry, success: false };
+						}
+
 						const body: Record<string, unknown> = {
 							provider_id: draft.provider_id,
 							secret: entry.secret,
@@ -276,6 +282,7 @@ export function Byok() {
 			toast.error(t("common.error"), { id: tid });
 		} finally {
 			setIsImporting(false);
+			setShowPassword(false);
 		}
 	};
 

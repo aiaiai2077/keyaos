@@ -5,6 +5,7 @@
 	"license": "BUSL-1.1",
 	"type": "module",
 	"scripts": {
+		"predev": "node scripts/ensure-dev-vars.mjs",
 		"dev": "vite",
 		"build": "node scripts/build-search-index.mjs && vite build",
 		"deploy": "pnpm build && wrangler d1 migrations apply keyaos-db --remote && wrangler deploy",

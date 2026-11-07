@@ -121,10 +121,11 @@ pnpm deploy                          # 构建、执行迁移、部署
 
 ```bash
 cp .env.example .env.local           # 填入服务商密钥
-cp .dev.vars.example .dev.vars       # 填入 secrets（ADMIN_TOKEN 等）
 pnpm db:setup:local
-pnpm dev                             # http://localhost:5173
+pnpm dev                             # 首次启动自动生成 .dev.vars；http://localhost:5173
 ```
+
+`.dev.vars` 会自动生成随机的 `ADMIN_TOKEN` 和 `ENCRYPTION_KEY`，已有文件不会被覆盖。请保留此文件和密钥；更换 `ENCRYPTION_KEY` 后，已有加密数据将无法解密。
 
 ## 📡 使用方式
 

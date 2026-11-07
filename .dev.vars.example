@@ -1,5 +1,5 @@
 # Keyaos — Worker Secrets (local development)
-# Copy to .dev.vars and fill in your values.
+# `pnpm dev` creates .dev.vars with fresh local secrets if it does not exist.
 # Production secrets: set via `wrangler secret put <NAME>`
 
 # ─── Core (required) ─────────────────────────────────────

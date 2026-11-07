@@ -121,10 +121,11 @@ pnpm deploy                          # builds, applies migrations, deploys
 
 ```bash
 cp .env.example .env.local           # fill in provider keys
-cp .dev.vars.example .dev.vars       # fill in secrets (ADMIN_TOKEN, etc.)
 pnpm db:setup:local
-pnpm dev                             # http://localhost:5173
+pnpm dev                             # generates .dev.vars on first run; http://localhost:5173
 ```
+
+`.dev.vars` is generated with random `ADMIN_TOKEN` and `ENCRYPTION_KEY` values if it does not exist. Existing files are never overwritten. Keep this file and its keys; changing `ENCRYPTION_KEY` makes previously encrypted data unreadable.
 
 ## 📡 Usage
 

@@ -157,7 +157,7 @@
 		"add_new": "Add Credential",
 		"bulk_import": "Bulk Import",
 		"bulk_placeholder": "Paste one API key per line",
-		"bulk_hint": "One key per line, up to 500. All keys use the selected provider, quota, and pricing settings.",
+		"bulk_hint": "Select a provider above. Each line is validated and added as a separate credential, up to 500. Change the provider to import keys for another provider.",
 		"bulk_empty": "Enter at least one API key.",
 		"bulk_limit": "You can import up to 500 API keys at a time.",
 		"bulk_progress": "Importing {{done}} / {{total}}…",

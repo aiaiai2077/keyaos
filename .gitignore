@@ -9,8 +9,9 @@ dist/
 coverage/
 /docs/
 references/
-scripts/
+scripts/*
 !scripts/build-search-index.mjs
+!scripts/ensure-dev-vars.mjs
 public/pagefind/
 *.log
 *.pid
