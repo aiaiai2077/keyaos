@@ -97,6 +97,9 @@ export function Byok() {
 	);
 	const [isDeletingSelected, setIsDeletingSelected] = useState(false);
 	const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+	const [syncingProviderId, setSyncingProviderId] = useState<string | null>(
+		null,
+	);
 	const [expandedProviders, setExpandedProviders] = useState(
 		() => new Set<string>(),
 	);
@@ -635,6 +638,67 @@ export function Byok() {
 			toast.error(t("common.error"), { id: tid });
 		} finally {
 			setIsCheckingHealth(false);
+		}
+	};
+
+	const handleSyncModels = async (credentialId: string, providerId: string) => {
+		if (syncingProviderId) return;
+		setSyncingProviderId(providerId);
+		const tid = toast.loading(t("credentials.sync_models_running"));
+		try {
+			const startResponse = await fetch(
+				`/api/credentials/${encodeURIComponent(credentialId)}/models/sync`,
+				{
+					method: "POST",
+					headers: await getHeaders(),
+				},
+			);
+			const startData = await startResponse.json();
+			if (!startResponse.ok) {
+				toastApiError(startData, t, tid);
+				return;
+			}
+			if (typeof startData.jobId !== "string") {
+				throw new Error(t("credentials.sync_models_failed"));
+			}
+
+			const deadline = Date.now() + 5 * 60 * 1000;
+			while (Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 1000));
+				const statusResponse = await fetch(
+					`/api/credentials/model-sync/${encodeURIComponent(startData.jobId)}`,
+					{ headers: await getHeaders() },
+				);
+				const statusData = await statusResponse.json();
+				if (!statusResponse.ok) {
+					toastApiError(statusData, t, tid);
+					return;
+				}
+				if (statusData.status === "completed") {
+					refetch();
+					toast.success(
+						t("credentials.sync_models_result", {
+							count: statusData.modelCount,
+						}),
+						{ id: tid },
+					);
+					return;
+				}
+				if (statusData.status === "failed") {
+					toast.error(statusData.error || t("credentials.sync_models_failed"), {
+						id: tid,
+					});
+					return;
+				}
+			}
+			toast.error(t("credentials.sync_models_timeout"), { id: tid });
+		} catch (error) {
+			console.error(error);
+			toast.error(error instanceof Error ? error.message : t("common.error"), {
+				id: tid,
+			});
+		} finally {
+			setSyncingProviderId(null);
 		}
 	};
 
@@ -1213,7 +1277,30 @@ export function Byok() {
 																total: groupCredentials.length,
 															})}
 														</td>
-														<td className="py-4 pl-3 pr-4 sm:pr-6" />
+														<td className="py-4 pl-3 pr-4 sm:pr-6">
+															<Button
+																variant="secondary"
+																onClick={() =>
+																	handleSyncModels(
+																		groupCredentials[0].id,
+																		providerId,
+																	)
+																}
+																disabled={syncingProviderId !== null || loading}
+															>
+																<ArrowPathIcon
+																	aria-hidden="true"
+																	className={`-ml-0.5 size-4 ${
+																		syncingProviderId === providerId
+																			? "animate-spin"
+																			: ""
+																	}`}
+																/>
+																{syncingProviderId === providerId
+																	? t("credentials.sync_models_running")
+																	: t("credentials.sync_models")}
+															</Button>
+														</td>
 													</tr>
 													{groupExpanded &&
 														groupCredentials.map((cred) => (

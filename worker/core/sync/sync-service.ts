@@ -12,6 +12,7 @@ import { log } from "../../shared/logger";
 import type { Env } from "../../shared/types";
 import { CatalogDao } from "../db/catalog-dao";
 import { CredentialsDao } from "../db/credentials-dao";
+import { ModelSyncJobsDao } from "../db/model-sync-jobs-dao";
 import type { ParsedModel } from "../providers/interface";
 import {
 	getAllProviders,
@@ -332,6 +333,53 @@ export async function syncModels(
 			error: error instanceof Error ? error.message : String(error),
 		});
 		return syncFromRemote(db);
+	}
+}
+
+export async function syncModelsForCredential(
+	db: D1Database,
+	encryptionKey: string,
+	jobId: string,
+	ownerId: string,
+	credentialId: string,
+	cnyUsdRate = 7,
+): Promise<void> {
+	const jobsDao = new ModelSyncJobsDao(db);
+	await jobsDao.markRunning(jobId);
+
+	try {
+		const credentialsDao = new CredentialsDao(db, encryptionKey);
+		const credential = await credentialsDao.get(credentialId, ownerId);
+		if (!credential)
+			throw new Error("Credential was removed before model sync");
+
+		const provider = getProvider(credential.provider_id);
+		if (!provider) {
+			throw new Error(`Unknown provider: ${credential.provider_id}`);
+		}
+
+		const secret = await credentialsDao.decryptSecret(credential);
+		const models = await provider.fetchModels(cnyUsdRate, secret);
+		if (models.length === 0) {
+			throw new Error(
+				"Provider returned no models; the catalog was not changed",
+			);
+		}
+
+		await new CatalogDao(db).upsert(models);
+		await jobsDao.markCompleted(jobId, models.length);
+		log.info("sync", "Models synced from credential", {
+			provider_id: credential.provider_id,
+			models: models.length,
+		});
+	} catch (error) {
+		const message =
+			error instanceof Error ? error.message : "Unknown model sync error";
+		log.error("sync", "Credential model sync failed", {
+			job_id: jobId,
+			error: message,
+		});
+		await jobsDao.markFailed(jobId, message.slice(0, 500));
 	}
 }
 

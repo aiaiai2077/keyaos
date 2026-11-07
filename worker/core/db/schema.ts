@@ -60,6 +60,19 @@ export interface DbModelCatalog {
 	refreshed_at: number;
 }
 
+export interface DbModelSyncJob {
+	id: string;
+	owner_id: string;
+	credential_id: string;
+	provider_id: string;
+	status: "queued" | "running" | "completed" | "failed";
+	model_count: number;
+	error: string | null;
+	created_at: number;
+	updated_at: number;
+	completed_at: number | null;
+}
+
 export interface DbLogEntry {
 	id: string;
 	consumer_id: string;

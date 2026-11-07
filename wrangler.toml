@@ -29,5 +29,5 @@ enabled = true
 head_sampling_rate = 1
 
 [triggers]
-# Daily credential health checks run at 00:00 UTC.
+# Upstream model sync runs every six hours; credential health checks run daily.
 crons = ["*/1 * * * *", "0 */6 * * *", "0 0 * * *"]

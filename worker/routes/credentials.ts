@@ -2,8 +2,12 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { CredentialsDao } from "../core/db/credentials-dao";
 import { LogsDao } from "../core/db/logs-dao";
+import { ModelSyncJobsDao } from "../core/db/model-sync-jobs-dao";
 import { getProvider } from "../core/providers/registry";
-import { syncCredentialHealth } from "../core/sync/sync-service";
+import {
+	syncCredentialHealth,
+	syncModelsForCredential,
+} from "../core/sync/sync-service";
 import { sha256 } from "../shared/crypto";
 import { ApiError, BadRequestError } from "../shared/errors";
 import type { AppEnv } from "../shared/types";
@@ -157,6 +161,76 @@ credentialsRouter.post("/health-check", async (c) => {
 		c.get("owner_id"),
 	);
 	return c.json(result);
+});
+
+credentialsRouter.post("/:id/models/sync", async (c) => {
+	const credentialId = c.req.param("id");
+	const ownerId = c.get("owner_id");
+	const credential = await new CredentialsDao(
+		c.env.DB,
+		c.env.ENCRYPTION_KEY,
+	).get(credentialId, ownerId);
+	if (!credential) {
+		throw new ApiError(
+			"Credential not found",
+			404,
+			"not_found",
+			"credential_not_found",
+		);
+	}
+
+	const provider = getProvider(credential.provider_id);
+	if (!provider) {
+		throw new BadRequestError(
+			`Unknown provider: ${credential.provider_id}`,
+			"unknown_provider",
+		);
+	}
+
+	const job = await new ModelSyncJobsDao(c.env.DB).create({
+		ownerId,
+		credentialId,
+		providerId: credential.provider_id,
+	});
+	const cnyRate = Number.parseFloat(c.env.CNY_USD_RATE || "7");
+	c.executionCtx.waitUntil(
+		syncModelsForCredential(
+			c.env.DB,
+			c.env.ENCRYPTION_KEY,
+			job.id,
+			ownerId,
+			credentialId,
+			cnyRate,
+		),
+	);
+
+	return c.json({ jobId: job.id, status: job.status }, 202);
+});
+
+credentialsRouter.get("/model-sync/:jobId", async (c) => {
+	const job = await new ModelSyncJobsDao(c.env.DB).getForOwner(
+		c.req.param("jobId"),
+		c.get("owner_id"),
+	);
+	if (!job) {
+		throw new ApiError(
+			"Model sync job not found",
+			404,
+			"not_found",
+			"model_sync_job_not_found",
+		);
+	}
+
+	return c.json({
+		jobId: job.id,
+		provider_id: job.provider_id,
+		status: job.status,
+		modelCount: job.model_count,
+		error: job.error,
+		createdAt: job.created_at,
+		updatedAt: job.updated_at,
+		completedAt: job.completed_at,
+	});
 });
 
 credentialsRouter.get("/", async (c) => {
