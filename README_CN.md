@@ -70,14 +70,14 @@ flowchart LR
     Sync -.-> Router
 ```
 
-**请求流程：** 客户端向任一端点发起请求。Auth 校验 API Key 并检查权限（模型限制、配额、到期时间、IP）。路由器按 `单价 × 倍率` 对所有凭证排序，选出最便宜的健康选项。熔断器跳过近期故障的服务商。SSE 拦截器对响应流做 tee — 实时转发给客户端的同时，在后台提取用量数据用于计费。Cron 任务每分钟同步模型可用性和价格。
+**请求流程：** 客户端向任一端点发起请求。Auth 校验 API Key 并检查权限（模型限制、配额、到期时间、IP）。路由器按 `单价 × 倍率` 对所有凭证排序，选出最便宜的健康选项。熔断器跳过近期故障的服务商。SSE 拦截器对响应流做 tee — 实时转发给客户端的同时，在后台提取用量数据用于计费。Cron 任务每分钟同步模型可用性和价格，并每天 00:00 UTC 检查凭证健康状态。
 
 ## ✨ 功能特性
 
 - **最优价格路由** — 每次请求都走当前最便宜的服务商
 - **自动故障转移** — 配额耗尽或被限速？自动切换到下一个最优选项
 - **零延迟流式** — SSE 响应实时拆分转发，不做缓冲
-- **自动同步目录** — 模型可用性和价格通过 Cron 定时更新
+- **自动同步目录** — 模型可用性和价格通过 Cron 定时更新；凭证健康状态每天检查
 - **多协议支持** — OpenAI Chat & Embeddings、Anthropic Messages、Google Gemini、AWS Event Stream
 - **多模态** — 图片生成、图片/音频/视频/PDF 输入，通过 chat completions 透传
 - **推理强度** — 跨服务商统一归一化 `reasoning_effort` 参数
@@ -224,7 +224,7 @@ Keyaos 内置了完整的前端，基于 React 19、Vite 7 和 Tailwind CSS 4 �
 |------|------|
 | 运行时 | Cloudflare Workers |
 | 数据库 | Cloudflare D1（SQLite）|
-| 定时任务 | Cron Triggers（每分钟）|
+| 定时任务 | Cron Triggers（每分钟、每 6 小时及每日健康检查）|
 | 前端 | React 19 · Vite 7 · Tailwind CSS 4 |
 | UI 组件 | Radix UI · Headless UI · Framer Motion |
 | 后端 | Hono 4 · TypeScript |

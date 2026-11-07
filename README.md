@@ -70,7 +70,7 @@ flowchart LR
     Sync -.-> Router
 ```
 
-**Request flow:** Client sends a request to any supported endpoint. Auth validates the API key and checks permissions (model restrictions, quota, expiry, IP). The router ranks all available credentials by `unit_price × multiplier` and picks the cheapest healthy one. The circuit breaker skips providers with recent failures. The SSE interceptor tee's the response stream — forwarding it to the client in real time while extracting usage data for billing in the background. A Cron job syncs model availability and pricing every minute.
+**Request flow:** Client sends a request to any supported endpoint. Auth validates the API key and checks permissions (model restrictions, quota, expiry, IP). The router ranks all available credentials by `unit_price × multiplier` and picks the cheapest healthy one. The circuit breaker skips providers with recent failures. The SSE interceptor tee's the response stream — forwarding it to the client in real time while extracting usage data for billing in the background. Cron jobs sync model availability and pricing every minute and check credential health daily at 00:00 UTC.
 
 ## ✨ Features
 

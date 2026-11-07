@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CredentialsDao } from "../core/db/credentials-dao";
 import { LogsDao } from "../core/db/logs-dao";
 import { getProvider } from "../core/providers/registry";
+import { syncCredentialHealth } from "../core/sync/sync-service";
 import { sha256 } from "../shared/crypto";
 import { ApiError, BadRequestError } from "../shared/errors";
 import type { AppEnv } from "../shared/types";
@@ -147,6 +148,15 @@ credentialsRouter.post("/", async (c) => {
 		},
 		201,
 	);
+});
+
+credentialsRouter.post("/health-check", async (c) => {
+	const result = await syncCredentialHealth(
+		c.env.DB,
+		c.env.ENCRYPTION_KEY,
+		c.get("owner_id"),
+	);
+	return c.json(result);
 });
 
 credentialsRouter.get("/", async (c) => {

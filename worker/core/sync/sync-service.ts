@@ -184,26 +184,26 @@ const CATALOG_URL = "https://keyaos.com/api/catalog";
 export async function syncFromRemote(db: D1Database): Promise<void> {
 	let res: Response;
 	try {
-		res = await fetch(CATALOG_URL);
+		const catalogUrl = new URL(CATALOG_URL);
+		catalogUrl.searchParams.set("_sync", Date.now().toString());
+		res = await fetch(catalogUrl, {
+			headers: { "x-keyaos-cache-bypass": "1" },
+		});
 	} catch (err) {
-		log.warn("sync", "Catalog fetch error, skipping", {
+		log.error("sync", "Catalog fetch error", {
 			error: err instanceof Error ? err.message : String(err),
 		});
-		return;
+		throw err;
 	}
 
 	if (!res.ok) {
-		log.warn("sync", "Catalog fetch failed, skipping", {
-			status: res.status,
-		});
-		return;
+		throw new Error(`Catalog fetch failed with status ${res.status}`);
 	}
 
 	const body = (await res.json()) as { data?: ParsedModel[] };
 	const entries = body.data;
 	if (!Array.isArray(entries) || entries.length === 0) {
-		log.warn("sync", "Catalog returned 0 entries, skipping");
-		return;
+		throw new Error("Catalog returned no model entries");
 	}
 
 	const dao = new CatalogDao(db);
@@ -264,4 +264,84 @@ export async function syncAutoCredits(
 			});
 		}
 	}
+}
+
+export interface CredentialHealthCheckResult {
+	total: number;
+	healthy: number;
+	degraded: number;
+	skipped: number;
+	failed: number;
+}
+
+export async function syncCredentialHealth(
+	db: D1Database,
+	encryptionKey: string,
+	ownerId?: string,
+): Promise<CredentialHealthCheckResult> {
+	const dao = new CredentialsDao(db, encryptionKey);
+	const credentials = ownerId
+		? await dao.getAll(ownerId)
+		: await dao.getGlobal();
+	const result: CredentialHealthCheckResult = {
+		total: credentials.length,
+		healthy: 0,
+		degraded: 0,
+		skipped: 0,
+		failed: 0,
+	};
+
+	for (let i = 0; i < credentials.length; i += 16) {
+		const batch = credentials.slice(i, i + 16);
+		const results = await Promise.allSettled(
+			batch.map(async (credential) => {
+				const provider = getProvider(credential.provider_id);
+				if (!provider) {
+					result.skipped += 1;
+					log.warn(
+						"sync",
+						"Credential health check skipped: unknown provider",
+						{
+							providerId: credential.provider_id,
+						},
+					);
+					return;
+				}
+
+				try {
+					const secret = await dao.decryptSecret(credential);
+					const isValid = await provider.validateKey(secret);
+					const status = isValid ? "ok" : "degraded";
+					await dao.reportHealthCheck(credential.id, status, ownerId);
+					return status;
+				} catch (error) {
+					log.error("sync", "Credential health check failed", {
+						providerId: credential.provider_id,
+						error: error instanceof Error ? error.message : String(error),
+					});
+					await dao.reportHealthCheck(credential.id, "degraded", ownerId);
+					return "degraded";
+				}
+			}),
+		);
+		for (const settled of results) {
+			if (settled.status === "fulfilled") {
+				if (settled.value === "ok") result.healthy += 1;
+				else if (settled.value === "degraded") result.degraded += 1;
+			} else {
+				result.failed += 1;
+				log.error("sync", "Failed to persist credential health status", {
+					error:
+						settled.reason instanceof Error
+							? settled.reason.message
+							: String(settled.reason),
+				});
+			}
+		}
+	}
+
+	log.info("sync", "Daily credential health check completed", {
+		...result,
+	});
+	return result;
 }

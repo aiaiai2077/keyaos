@@ -7,6 +7,7 @@ import { CandleDao } from "./core/db/candle-dao";
 import {
 	syncAllModels,
 	syncAutoCredits,
+	syncCredentialHealth,
 	syncFromRemote,
 } from "./core/sync/sync-service";
 import { sweepAutoTopUp } from "./platform/billing/auto-topup-service";
@@ -73,6 +74,7 @@ app.use(
 			"x-api-key",
 			"anthropic-version",
 			"x-keyaos-depth",
+			"x-keyaos-cache-bypass",
 		],
 		exposeHeaders: ["x-request-id", "x-provider", "x-credential-id"],
 	}),
@@ -255,20 +257,28 @@ export default {
 		const rate = Number.parseFloat(env.CNY_USD_RATE || "7");
 
 		ctx.waitUntil(
-			event.cron === "0 */6 * * *"
-				? (async () => {
-						if (env.LOCAL_SYNC) {
-							await syncAllModels(env.DB, rate, env);
-						} else {
-							await syncFromRemote(env.DB);
-						}
-						await syncAutoCredits(env.DB, env.ENCRYPTION_KEY, rate);
-						await candleDao.pruneOldCandles();
-					})()
-				: (async () => {
-						await candleDao.aggregate(Date.now() - 60_000);
-						await sweepAutoTopUp(env.DB, env.STRIPE_SECRET_KEY);
-					})(),
+			event.cron === "0 0 * * *"
+				? syncCredentialHealth(env.DB, env.ENCRYPTION_KEY)
+				: event.cron === "0 */6 * * *"
+					? (async () => {
+							try {
+								if (env.LOCAL_SYNC) {
+									await syncAllModels(env.DB, rate, env);
+								} else {
+									await syncFromRemote(env.DB);
+								}
+							} catch (error) {
+								log.error("sync", "Scheduled model catalog sync failed", {
+									error: error instanceof Error ? error.message : String(error),
+								});
+							}
+							await syncAutoCredits(env.DB, env.ENCRYPTION_KEY, rate);
+							await candleDao.pruneOldCandles();
+						})()
+					: (async () => {
+							await candleDao.aggregate(Date.now() - 60_000);
+							await sweepAutoTopUp(env.DB, env.STRIPE_SECRET_KEY);
+						})(),
 		);
 	},
 };

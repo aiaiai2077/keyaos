@@ -38,7 +38,7 @@ export function useFetch<T>(url: string, options: FetchOptions = {}) {
 	const [error, setError] = useState<Error | null>(null);
 
 	const execute = useCallback(
-		async (signal: AbortSignal) => {
+		async (signal: AbortSignal, bypassCache = false) => {
 			if (skip) {
 				setLoading(false);
 				return;
@@ -59,6 +59,7 @@ export function useFetch<T>(url: string, options: FetchOptions = {}) {
 
 			try {
 				const headers = new Headers(optionsRef.current.headers);
+				if (bypassCache) headers.set("x-keyaos-cache-bypass", "1");
 				if (requireAuth) {
 					const token = await getToken();
 					if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -101,7 +102,7 @@ export function useFetch<T>(url: string, options: FetchOptions = {}) {
 		const hit = cache.get(url);
 		if (hit) hit.ts = 0;
 		const controller = new AbortController();
-		execute(controller.signal);
+		execute(controller.signal, true);
 	}, [execute, url]);
 
 	return { data, loading, error, refetch };

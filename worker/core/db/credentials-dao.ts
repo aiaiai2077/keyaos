@@ -214,6 +214,22 @@ export class CredentialsDao {
 			.run();
 	}
 
+	async reportHealthCheck(
+		id: string,
+		status: "ok" | "degraded",
+		ownerId?: string,
+	): Promise<void> {
+		const query = ownerId
+			? "UPDATE upstream_credentials SET health_status = ?, last_health_check = ? WHERE id = ? AND owner_id = ?"
+			: "UPDATE upstream_credentials SET health_status = ?, last_health_check = ? WHERE id = ?";
+		const statement = this.db.prepare(query);
+		if (ownerId) {
+			await statement.bind(status, Date.now(), id, ownerId).run();
+		} else {
+			await statement.bind(status, Date.now(), id).run();
+		}
+	}
+
 	async reportFailure(
 		id: string,
 		statusCode?: number,

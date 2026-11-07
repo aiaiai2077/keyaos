@@ -16,7 +16,14 @@ import {
 	InformationCircleIcon,
 } from "@heroicons/react/24/outline";
 import type React from "react";
-import { useCallback, useMemo, useState } from "react";
+import {
+	Fragment,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import toast from "react-hot-toast";
 import { useTranslation } from "react-i18next";
 import { useAuth } from "../auth";
@@ -85,6 +92,37 @@ export function Byok() {
 	const [refreshingQuotaId, setRefreshingQuotaId] = useState<string | null>(
 		null,
 	);
+	const [selectedCredentialIds, setSelectedCredentialIds] = useState(
+		() => new Set<string>(),
+	);
+	const [isDeletingSelected, setIsDeletingSelected] = useState(false);
+	const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+	const [expandedProviders, setExpandedProviders] = useState(
+		() => new Set<string>(),
+	);
+	const selectAllRef = useRef<HTMLInputElement>(null);
+	const credentialGroups = useMemo(() => {
+		const groups = new Map<string, CredentialInfo[]>();
+		for (const credential of credentials) {
+			const group = groups.get(credential.provider_id) ?? [];
+			group.push(credential);
+			groups.set(credential.provider_id, group);
+		}
+		return [...groups.entries()];
+	}, [credentials]);
+	const selectedCredentials = credentials.filter((credential) =>
+		selectedCredentialIds.has(credential.id),
+	);
+	const allCredentialsSelected =
+		credentials.length > 0 && selectedCredentials.length === credentials.length;
+	const partiallySelected =
+		selectedCredentials.length > 0 && !allCredentialsSelected;
+
+	useEffect(() => {
+		if (selectAllRef.current) {
+			selectAllRef.current.indeterminate = partiallySelected;
+		}
+	}, [partiallySelected]);
 
 	const getHeaders = async () => ({
 		"Content-Type": "application/json",
@@ -201,10 +239,24 @@ export function Byok() {
 			return;
 		}
 
+		const seenSecrets = new Set<string>();
+		const uniqueEntries: typeof entries = [];
+		let duplicateCount = 0;
+		for (const entry of entries) {
+			if (seenSecrets.has(entry.secret)) {
+				duplicateCount += 1;
+				continue;
+			}
+			seenSecrets.add(entry.secret);
+			uniqueEntries.push(entry);
+		}
+		const inputDuplicateCount = duplicateCount;
+
 		setIsImporting(true);
-		setImportProgress({ done: 0, total: entries.length });
+		setImportProgress({ done: inputDuplicateCount, total: entries.length });
 		const tid = toast.loading(t("common.loading"));
 		const failures: typeof entries = [];
+		const failureCounts = new Map<string, number>();
 		let imported = 0;
 		const secretPattern =
 			guide?.secretPattern && !isOAuth ? new RegExp(guide.secretPattern) : null;
@@ -216,12 +268,17 @@ export function Byok() {
 				: undefined;
 			const priceMultiplier = Number.parseFloat(draft.priceMultiplier) || 1.0;
 
-			for (let i = 0; i < entries.length; i += 8) {
-				const chunk = entries.slice(i, i + 8);
+			for (let i = 0; i < uniqueEntries.length; i += 8) {
+				const chunk = uniqueEntries.slice(i, i + 8);
 				const results = await Promise.all(
 					chunk.map(async (entry) => {
 						if (secretPattern && !secretPattern.test(entry.secret)) {
-							return { entry, success: false };
+							return {
+								entry,
+								success: false,
+								duplicate: false,
+								errorCode: "invalid_secret_format",
+							};
 						}
 
 						const body: Record<string, unknown> = {
@@ -238,20 +295,46 @@ export function Byok() {
 								headers,
 								body: JSON.stringify(body),
 							});
-							return { entry, success: res.ok };
+							const data = (await res.json().catch(() => null)) as {
+								error?: { code?: string };
+							} | null;
+							const errorCode = res.ok
+								? null
+								: (data?.error?.code ?? "unknown_error");
+							return {
+								entry,
+								success: res.ok,
+								duplicate: errorCode === "credential_duplicate",
+								errorCode,
+							};
 						} catch (error) {
 							console.error(error);
-							return { entry, success: false };
+							return {
+								entry,
+								success: false,
+								duplicate: false,
+								errorCode: "network_error",
+							};
 						}
 					}),
 				);
 
 				for (const result of results) {
 					if (result.success) imported += 1;
-					else failures.push(result.entry);
+					else if (result.duplicate) duplicateCount += 1;
+					else {
+						failures.push(result.entry);
+						const errorCode = result.errorCode ?? "unknown_error";
+						failureCounts.set(
+							errorCode,
+							(failureCounts.get(errorCode) ?? 0) + 1,
+						);
+					}
 				}
 				setImportProgress({
-					done: Math.min(i + chunk.length, entries.length),
+					done:
+						inputDuplicateCount +
+						Math.min(i + chunk.length, uniqueEntries.length),
 					total: entries.length,
 				});
 			}
@@ -262,6 +345,7 @@ export function Byok() {
 			const summary = t("credentials.bulk_result", {
 				imported,
 				failed: failures.length,
+				duplicates: duplicateCount,
 			});
 			if (failures.length > 0) {
 				const lineNumbers = failures
@@ -272,7 +356,24 @@ export function Byok() {
 					failures.length > 20
 						? ` (${t("credentials.bulk_failed_lines", { lines: lineNumbers })}…)`
 						: ` (${t("credentials.bulk_failed_lines", { lines: lineNumbers })})`;
-				toast.error(`${summary}${suffix}`, { id: tid, duration: 8000 });
+				const [
+					topErrorCode = "unknown_error",
+					topErrorCount = failures.length,
+				] = [...failureCounts.entries()].sort((a, b) => b[1] - a[1])[0] ?? [];
+				const reason = t(`errors.${topErrorCode}`, {
+					defaultValue:
+						topErrorCode === "network_error"
+							? t("credentials.bulk_network_error")
+							: t("common.error"),
+				});
+				const reasonSuffix = t("credentials.bulk_failure_reason", {
+					count: topErrorCount,
+					reason,
+				});
+				toast.error(`${summary}${suffix} ${reasonSuffix}`, {
+					id: tid,
+					duration: 10000,
+				});
 			} else {
 				toast.success(summary, { id: tid });
 				setIsAddOpen(false);
@@ -383,6 +484,11 @@ export function Byok() {
 				headers: await getHeaders(),
 			});
 			if (res.ok) {
+				setSelectedCredentialIds((current) => {
+					const next = new Set(current);
+					next.delete(id);
+					return next;
+				});
 				refetch();
 				toast.success(t("common.success"), { id: tid });
 			} else {
@@ -391,6 +497,141 @@ export function Byok() {
 		} catch (err) {
 			console.error(err);
 			toast.error(t("common.error"), { id: tid });
+		}
+	};
+
+	const toggleCredentialSelection = (id: string) => {
+		setSelectedCredentialIds((current) => {
+			const next = new Set(current);
+			if (next.has(id)) next.delete(id);
+			else next.add(id);
+			return next;
+		});
+	};
+
+	const toggleProviderExpansion = (providerId: string) => {
+		setExpandedProviders((current) => {
+			const next = new Set(current);
+			if (next.has(providerId)) next.delete(providerId);
+			else next.add(providerId);
+			return next;
+		});
+	};
+
+	const toggleProviderSelection = (groupCredentials: CredentialInfo[]) => {
+		setSelectedCredentialIds((current) => {
+			const next = new Set(current);
+			const allSelected = groupCredentials.every((credential) =>
+				current.has(credential.id),
+			);
+			for (const credential of groupCredentials) {
+				if (allSelected) next.delete(credential.id);
+				else next.add(credential.id);
+			}
+			return next;
+		});
+	};
+
+	const toggleSelectAllCredentials = () => {
+		setSelectedCredentialIds(
+			allCredentialsSelected
+				? new Set()
+				: new Set(credentials.map((credential) => credential.id)),
+		);
+	};
+
+	const handleDeleteSelected = async () => {
+		if (selectedCredentials.length === 0 || isDeletingSelected) return;
+		if (
+			!confirm(
+				t("credentials.bulk_delete_confirm", {
+					count: selectedCredentials.length,
+				}),
+			)
+		) {
+			return;
+		}
+
+		setIsDeletingSelected(true);
+		const tid = toast.loading(t("common.loading"));
+		try {
+			const headers = await getHeaders();
+			const results: { id: string; success: boolean }[] = [];
+			for (let i = 0; i < selectedCredentials.length; i += 8) {
+				const chunk = selectedCredentials.slice(i, i + 8);
+				const chunkResults = await Promise.all(
+					chunk.map(async (credential) => {
+						try {
+							const res = await fetch(`/api/credentials/${credential.id}`, {
+								method: "DELETE",
+								headers,
+							});
+							return { id: credential.id, success: res.ok };
+						} catch (error) {
+							console.error(error);
+							return { id: credential.id, success: false };
+						}
+					}),
+				);
+				results.push(...chunkResults);
+			}
+			const deletedIds = results
+				.filter((result) => result.success)
+				.map((result) => result.id);
+			const failedCount = results.length - deletedIds.length;
+
+			if (deletedIds.length > 0) {
+				setSelectedCredentialIds((current) => {
+					const next = new Set(current);
+					for (const id of deletedIds) next.delete(id);
+					return next;
+				});
+				refetch();
+			}
+
+			const message = t("credentials.bulk_delete_result", {
+				deleted: deletedIds.length,
+				failed: failedCount,
+			});
+			if (failedCount > 0) toast.error(message, { id: tid });
+			else toast.success(message, { id: tid });
+		} catch (error) {
+			console.error(error);
+			toast.error(t("common.error"), { id: tid });
+		} finally {
+			setIsDeletingSelected(false);
+		}
+	};
+
+	const handleCheckAllHealth = async () => {
+		if (isCheckingHealth || credentials.length === 0) return;
+		setIsCheckingHealth(true);
+		const tid = toast.loading(t("common.loading"));
+		try {
+			const res = await fetch("/api/credentials/health-check", {
+				method: "POST",
+				headers: await getHeaders(),
+			});
+			const data = await res.json();
+			if (!res.ok) {
+				toastApiError(data, t, tid);
+				return;
+			}
+			refetch();
+			toast.success(
+				t("credentials.health_check_result", {
+					healthy: data.healthy,
+					degraded: data.degraded,
+					skipped: data.skipped,
+					failed: data.failed,
+				}),
+				{ id: tid, duration: 8000 },
+			);
+		} catch (error) {
+			console.error(error);
+			toast.error(t("common.error"), { id: tid });
+		} finally {
+			setIsCheckingHealth(false);
 		}
 	};
 
@@ -414,7 +655,20 @@ export function Byok() {
 						{t("credentials.subtitle")}
 					</p>
 				</div>
-				<div className="mt-4 flex gap-2 sm:ml-16 sm:mt-0 sm:flex-none">
+				<div className="mt-4 flex flex-wrap gap-2 sm:ml-16 sm:mt-0 sm:flex-none">
+					<Button
+						variant="secondary"
+						onClick={handleCheckAllHealth}
+						disabled={loading || isCheckingHealth || credentials.length === 0}
+					>
+						<ArrowPathIcon
+							aria-hidden="true"
+							className={`-ml-0.5 size-5 ${isCheckingHealth ? "animate-spin" : ""}`}
+						/>
+						{isCheckingHealth
+							? t("credentials.health_checking")
+							: t("credentials.health_check_all")}
+					</Button>
 					<Button onClick={() => openAddModal(false)}>
 						<PlusIcon aria-hidden="true" className="-ml-0.5 size-5" />
 						{t("credentials.add_new")}
@@ -542,6 +796,27 @@ export function Byok() {
 									className="block w-full rounded-lg border border-gray-200 bg-white py-2 px-3 font-mono text-sm text-gray-900 placeholder:text-gray-400 transition-colors focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white dark:placeholder:text-gray-500"
 									placeholder={t("credentials.bulk_placeholder")}
 								/>
+								<div className="mt-2">
+									<button
+										type="button"
+										disabled={isImporting || !bulkSecrets.trim()}
+										onClick={() => {
+											const lines = bulkSecrets
+												.split(/\r?\n/)
+												.map((line) => line.trim())
+												.filter(Boolean);
+											const uniqueLines = [...new Set(lines)];
+											const removed = lines.length - uniqueLines.length;
+											setBulkSecrets(uniqueLines.join("\n"));
+											toast.success(
+												t("credentials.bulk_deduplicated", { count: removed }),
+											);
+										}}
+										className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/10 dark:text-gray-300 dark:hover:bg-white/5"
+									>
+										{t("credentials.remove_duplicates")}
+									</button>
+								</div>
 								<p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
 									{t("credentials.bulk_hint")}
 								</p>
@@ -696,6 +971,25 @@ export function Byok() {
 				</form>
 			</Modal>
 
+			{selectedCredentials.length > 0 && (
+				<div className="mt-6 flex items-center justify-between gap-3">
+					<span className="text-sm text-gray-600 dark:text-gray-300">
+						{t("credentials.selected_count", {
+							count: selectedCredentials.length,
+						})}
+					</span>
+					<Button
+						variant="secondary"
+						onClick={handleDeleteSelected}
+						disabled={isDeletingSelected}
+					>
+						{isDeletingSelected
+							? t("common.loading")
+							: t("credentials.delete_selected")}
+					</Button>
+				</div>
+			)}
+
 			<div className="mt-8 flow-root">
 				<div className="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
 					<div className="inline-block min-w-full py-2 align-middle sm:px-6 lg:px-8">
@@ -703,6 +997,17 @@ export function Byok() {
 							<table className="min-w-full divide-y divide-gray-200 dark:divide-white/10">
 								<thead className="bg-gray-50 dark:bg-white/5">
 									<tr>
+										<th scope="col" className="py-3.5 pl-4 pr-2 sm:pl-6">
+											<input
+												ref={selectAllRef}
+												type="checkbox"
+												checked={allCredentialsSelected}
+												onChange={toggleSelectAllCredentials}
+												disabled={loading || credentials.length === 0}
+												aria-label={t("credentials.select_all")}
+												className="size-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500 dark:border-white/20 dark:bg-gray-900"
+											/>
+										</th>
 										<th
 											scope="col"
 											className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-white"
@@ -764,6 +1069,9 @@ export function Byok() {
 										Array.from({ length: 4 }).map((_, i) => (
 											// biome-ignore lint/suspicious/noArrayIndexKey: static skeleton
 											<tr key={i}>
+												<td className="py-4 pl-4 pr-2 sm:pl-6">
+													<div className="size-4 rounded border border-gray-200 bg-gray-100 dark:border-white/10 dark:bg-white/5" />
+												</td>
 												<td className="py-4 pl-4 sm:pl-6">
 													<div className="flex items-center gap-2">
 														<div className="size-5 rounded-full bg-gray-200 dark:bg-white/10 animate-pulse" />
@@ -789,222 +1097,351 @@ export function Byok() {
 									) : credentials.length === 0 ? (
 										<tr>
 											<td
-												colSpan={9}
+												colSpan={10}
 												className="py-4 text-center text-sm text-gray-500 dark:text-gray-400"
 											>
 												{t("credentials.no_data")}
 											</td>
 										</tr>
 									) : (
-										credentials.map((cred) => (
-											<tr
-												key={cred.id}
-												className={cred.isEnabled ? "" : "opacity-50"}
-											>
-												{/* Provider */}
-												<td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6 dark:text-white">
-													{(() => {
-														const meta = providers.find(
-															(p) => p.id === cred.provider_id,
-														);
-														return meta ? (
-															<ProviderChip
-																src={meta.logoUrl}
-																name={meta.name}
-															/>
-														) : (
-															<span>{cred.provider_id}</span>
-														);
-													})()}
-												</td>
-												{/* Secret */}
-												<td className="whitespace-nowrap px-3 py-4 text-sm font-mono text-gray-500 dark:text-gray-400">
-													<div className="flex items-center gap-2">
-														{cred.secretHint}
-														<button
-															type="button"
-															onClick={() => {
-																navigator.clipboard.writeText(cred.secretHint);
-																toast.success("Copied to clipboard");
-															}}
-															className="text-gray-400 hover:text-brand-500"
-															title="Copy hint"
-														>
-															<ClipboardDocumentIcon className="size-4" />
-														</button>
-													</div>
-												</td>
-												{/* Quota */}
-												<td className="whitespace-nowrap px-3 py-4 text-sm">
-													{editingId === cred.id ? (
-														<div className="flex items-center gap-2">
+										credentialGroups.map(([providerId, groupCredentials]) => {
+											const selectedCount = groupCredentials.filter(
+												(credential) =>
+													selectedCredentialIds.has(credential.id),
+											).length;
+											const healthCounts: Record<HealthStatus, number> = {
+												ok: 0,
+												degraded: 0,
+												dead: 0,
+												cooldown: 0,
+											};
+											for (const credential of groupCredentials) {
+												healthCounts[credential.health] += 1;
+											}
+											const groupExpanded = expandedProviders.has(providerId);
+											const providerMeta = providers.find(
+												(provider) => provider.id === providerId,
+											);
+
+											return (
+												<Fragment key={providerId}>
+													<tr className="bg-gray-50/70 dark:bg-white/[0.03]">
+														<td className="py-4 pl-4 pr-2 sm:pl-6">
 															<input
-																type="number"
-																min="0"
-																step="0.01"
-																value={editQuota}
-																onChange={(e) => setEditQuota(e.target.value)}
-																className="w-20 rounded-lg border border-gray-200 bg-white py-1 px-2 text-sm text-gray-900 transition-colors focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
-															/>
-															<button
-																type="button"
-																onClick={() => handleUpdateQuota(cred.id)}
-																className={`${TOKENS.green.text} ${TOKENS.green.textHover}`}
-																title={t("common.save")}
-															>
-																<CheckIcon className="size-5" />
-															</button>
-															<button
-																type="button"
-																onClick={() => setEditingId(null)}
-																className={`${TOKENS.red.text} ${TOKENS.red.textHover}`}
-																title={t("common.cancel")}
-															>
-																<XMarkIcon className="size-5" />
-															</button>
-														</div>
-													) : (
-														<span
-															className={`font-mono flex items-center ${
-																isSubscription(cred)
-																	? "text-brand-500 dark:text-brand-400"
-																	: cred.quota == null
-																		? "text-gray-400 dark:text-gray-500"
-																		: cred.quota > 0
-																			? TOKENS.green.text
-																			: TOKENS.red.text
-															}`}
-														>
-															{formatQuota(cred)}
-															{cred.quotaSource === "auto" && (
-																<button
-																	type="button"
-																	disabled={refreshingQuotaId === cred.id}
-																	onClick={() => handleRefreshQuota(cred.id)}
-																	className="ml-2 text-gray-400 hover:text-brand-500 disabled:opacity-50"
-																	title={t("credentials.refresh_quota")}
-																>
-																	<ArrowPathIcon
-																		className={`size-4 ${refreshingQuotaId === cred.id ? "animate-spin" : ""}`}
-																	/>
-																</button>
-															)}
-															{cred.quotaSource === "manual" && (
-																<button
-																	type="button"
-																	onClick={() => {
-																		setEditingId(cred.id);
-																		setEditQuota((cred.quota ?? 0).toString());
-																	}}
-																	className="ml-2 text-gray-400 hover:text-brand-500"
-																	title={t("common.edit")}
-																>
-																	<PencilSquareIcon className="size-4" />
-																</button>
-															)}
-														</span>
-													)}
-												</td>
-												{/* Price Multiplier */}
-												<td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-													{editingSettingsId === cred.id ? (
-														<div className="flex items-center gap-2">
-															<input
-																type="number"
-																min="0.01"
-																max="1"
-																step="0.01"
-																value={editPriceMultiplier}
-																onChange={(e) =>
-																	setEditPriceMultiplier(e.target.value)
+																type="checkbox"
+																checked={
+																	selectedCount === groupCredentials.length
 																}
-																className="w-16 rounded-lg border border-gray-200 bg-white py-1 px-1 text-sm text-gray-900 transition-colors focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
+																onChange={() =>
+																	toggleProviderSelection(groupCredentials)
+																}
+																aria-label={t("credentials.select_provider", {
+																	provider: providerMeta?.name ?? providerId,
+																})}
+																className="size-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500 dark:border-white/20 dark:bg-gray-900"
 															/>
+														</td>
+														<td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6 dark:text-white">
 															<button
 																type="button"
-																onClick={() => {
-																	handleUpdateSettings(
-																		cred.id,
-																		cred.isEnabled,
-																		Number.parseFloat(editPriceMultiplier),
-																	);
-																	setEditingSettingsId(null);
-																}}
-																className={`${TOKENS.green.text} ${TOKENS.green.textHover}`}
-																title={t("common.save")}
+																onClick={() =>
+																	toggleProviderExpansion(providerId)
+																}
+																aria-expanded={groupExpanded}
+																className="flex items-center gap-2 text-left"
 															>
-																<CheckIcon className="size-5" />
+																{groupExpanded ? (
+																	<ChevronUpIcon className="size-4 shrink-0 text-gray-400" />
+																) : (
+																	<ChevronDownIcon className="size-4 shrink-0 text-gray-400" />
+																)}
+																{providerMeta ? (
+																	<ProviderChip
+																		src={providerMeta.logoUrl}
+																		name={providerMeta.name}
+																	/>
+																) : (
+																	<span>{providerId}</span>
+																)}
+																<span className="text-xs font-normal text-gray-500 dark:text-gray-400">
+																	{t("credentials.key_count", {
+																		count: groupCredentials.length,
+																	})}
+																</span>
 															</button>
-															<button
-																type="button"
-																onClick={() => setEditingSettingsId(null)}
-																className={`${TOKENS.red.text} ${TOKENS.red.textHover}`}
-																title={t("common.cancel")}
+														</td>
+														<td
+															colSpan={5}
+															className="px-3 py-4 text-sm text-gray-500 dark:text-gray-400"
+														>
+															{t("credentials.provider_earnings", {
+																earnings: formatUSD(
+																	groupCredentials.reduce(
+																		(total, credential) =>
+																			total + credential.earnings,
+																		0,
+																	),
+																),
+															})}
+														</td>
+														<td className="px-3 py-4">
+															<div className="flex flex-wrap gap-1.5">
+																{(
+																	[
+																		"ok",
+																		"degraded",
+																		"cooldown",
+																		"dead",
+																	] as const
+																).map((status) => (
+																	<HealthBadgeCount
+																		key={status}
+																		status={status}
+																		count={healthCounts[status]}
+																	/>
+																))}
+															</div>
+														</td>
+														<td className="px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+															{t("credentials.enabled_count", {
+																enabled: groupCredentials.filter(
+																	(credential) => credential.isEnabled,
+																).length,
+																total: groupCredentials.length,
+															})}
+														</td>
+														<td className="py-4 pl-3 pr-4 sm:pr-6" />
+													</tr>
+													{groupExpanded &&
+														groupCredentials.map((cred) => (
+															<tr
+																key={cred.id}
+																className={cred.isEnabled ? "" : "opacity-50"}
 															>
-																<XMarkIcon className="size-5" />
-															</button>
-														</div>
-													) : (
-														<div className="flex items-center font-mono text-gray-900 dark:text-white">
-															{cred.priceMultiplier}x
-															<button
-																type="button"
-																onClick={() => {
-																	setEditingSettingsId(cred.id);
-																	setEditPriceMultiplier(
-																		cred.priceMultiplier.toString(),
-																	);
-																}}
-																className="ml-2 text-gray-400 hover:text-brand-500"
-																title={t("common.edit")}
-															>
-																<PencilSquareIcon className="size-4" />
-															</button>
-														</div>
-													)}
-												</td>
-												{/* Earnings */}
-												<td className="whitespace-nowrap px-3 py-4 text-sm font-mono text-gray-900 dark:text-white">
-													{formatUSD(cred.earnings)}
-												</td>
-												{/* Added */}
-												<td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
-													{formatDateTime(cred.addedAt)}
-												</td>
-												{/* Health */}
-												<td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-													<HealthBadge status={cred.health} />
-												</td>
-												{/* Enabled */}
-												<td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-													<ToggleSwitch
-														enabled={cred.isEnabled}
-														onChange={(val) =>
-															handleUpdateSettings(
-																cred.id,
-																val,
-																cred.priceMultiplier,
-															)
-														}
-														label={t(
-															cred.isEnabled
-																? "credentials.enabled_true"
-																: "credentials.enabled_false",
-														)}
-													/>
-												</td>
-												{/* Actions */}
-												<td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
-													<button
-														type="button"
-														onClick={() => handleDelete(cred.id)}
-														className={`${TOKENS.red.text} ${TOKENS.red.textHover}`}
-													>
-														{t("common.delete")}
-													</button>
-												</td>
-											</tr>
-										))
+																<td className="py-4 pl-4 pr-2 sm:pl-6">
+																	<input
+																		type="checkbox"
+																		checked={selectedCredentialIds.has(cred.id)}
+																		onChange={() =>
+																			toggleCredentialSelection(cred.id)
+																		}
+																		aria-label={t(
+																			"credentials.select_credential",
+																			{
+																				credential: cred.secretHint,
+																			},
+																		)}
+																		className="size-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500 dark:border-white/20 dark:bg-gray-900"
+																	/>
+																</td>
+																<td className="py-4 pl-4 pr-3 sm:pl-6" />
+																{/* Secret */}
+																<td className="whitespace-nowrap px-3 py-4 text-sm font-mono text-gray-500 dark:text-gray-400">
+																	<div className="flex items-center gap-2">
+																		{cred.secretHint}
+																		<button
+																			type="button"
+																			onClick={() => {
+																				navigator.clipboard.writeText(
+																					cred.secretHint,
+																				);
+																				toast.success("Copied to clipboard");
+																			}}
+																			className="text-gray-400 hover:text-brand-500"
+																			title="Copy hint"
+																		>
+																			<ClipboardDocumentIcon className="size-4" />
+																		</button>
+																	</div>
+																</td>
+																{/* Quota */}
+																<td className="whitespace-nowrap px-3 py-4 text-sm">
+																	{editingId === cred.id ? (
+																		<div className="flex items-center gap-2">
+																			<input
+																				type="number"
+																				min="0"
+																				step="0.01"
+																				value={editQuota}
+																				onChange={(e) =>
+																					setEditQuota(e.target.value)
+																				}
+																				className="w-20 rounded-lg border border-gray-200 bg-white py-1 px-2 text-sm text-gray-900 transition-colors focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
+																			/>
+																			<button
+																				type="button"
+																				onClick={() =>
+																					handleUpdateQuota(cred.id)
+																				}
+																				className={`${TOKENS.green.text} ${TOKENS.green.textHover}`}
+																				title={t("common.save")}
+																			>
+																				<CheckIcon className="size-5" />
+																			</button>
+																			<button
+																				type="button"
+																				onClick={() => setEditingId(null)}
+																				className={`${TOKENS.red.text} ${TOKENS.red.textHover}`}
+																				title={t("common.cancel")}
+																			>
+																				<XMarkIcon className="size-5" />
+																			</button>
+																		</div>
+																	) : (
+																		<span
+																			className={`font-mono flex items-center ${
+																				isSubscription(cred)
+																					? "text-brand-500 dark:text-brand-400"
+																					: cred.quota == null
+																						? "text-gray-400 dark:text-gray-500"
+																						: cred.quota > 0
+																							? TOKENS.green.text
+																							: TOKENS.red.text
+																			}`}
+																		>
+																			{formatQuota(cred)}
+																			{cred.quotaSource === "auto" && (
+																				<button
+																					type="button"
+																					disabled={
+																						refreshingQuotaId === cred.id
+																					}
+																					onClick={() =>
+																						handleRefreshQuota(cred.id)
+																					}
+																					className="ml-2 text-gray-400 hover:text-brand-500 disabled:opacity-50"
+																					title={t("credentials.refresh_quota")}
+																				>
+																					<ArrowPathIcon
+																						className={`size-4 ${refreshingQuotaId === cred.id ? "animate-spin" : ""}`}
+																					/>
+																				</button>
+																			)}
+																			{cred.quotaSource === "manual" && (
+																				<button
+																					type="button"
+																					onClick={() => {
+																						setEditingId(cred.id);
+																						setEditQuota(
+																							(cred.quota ?? 0).toString(),
+																						);
+																					}}
+																					className="ml-2 text-gray-400 hover:text-brand-500"
+																					title={t("common.edit")}
+																				>
+																					<PencilSquareIcon className="size-4" />
+																				</button>
+																			)}
+																		</span>
+																	)}
+																</td>
+																{/* Price Multiplier */}
+																<td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+																	{editingSettingsId === cred.id ? (
+																		<div className="flex items-center gap-2">
+																			<input
+																				type="number"
+																				min="0.01"
+																				max="1"
+																				step="0.01"
+																				value={editPriceMultiplier}
+																				onChange={(e) =>
+																					setEditPriceMultiplier(e.target.value)
+																				}
+																				className="w-16 rounded-lg border border-gray-200 bg-white py-1 px-1 text-sm text-gray-900 transition-colors focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
+																			/>
+																			<button
+																				type="button"
+																				onClick={() => {
+																					handleUpdateSettings(
+																						cred.id,
+																						cred.isEnabled,
+																						Number.parseFloat(
+																							editPriceMultiplier,
+																						),
+																					);
+																					setEditingSettingsId(null);
+																				}}
+																				className={`${TOKENS.green.text} ${TOKENS.green.textHover}`}
+																				title={t("common.save")}
+																			>
+																				<CheckIcon className="size-5" />
+																			</button>
+																			<button
+																				type="button"
+																				onClick={() =>
+																					setEditingSettingsId(null)
+																				}
+																				className={`${TOKENS.red.text} ${TOKENS.red.textHover}`}
+																				title={t("common.cancel")}
+																			>
+																				<XMarkIcon className="size-5" />
+																			</button>
+																		</div>
+																	) : (
+																		<div className="flex items-center font-mono text-gray-900 dark:text-white">
+																			{cred.priceMultiplier}x
+																			<button
+																				type="button"
+																				onClick={() => {
+																					setEditingSettingsId(cred.id);
+																					setEditPriceMultiplier(
+																						cred.priceMultiplier.toString(),
+																					);
+																				}}
+																				className="ml-2 text-gray-400 hover:text-brand-500"
+																				title={t("common.edit")}
+																			>
+																				<PencilSquareIcon className="size-4" />
+																			</button>
+																		</div>
+																	)}
+																</td>
+																{/* Earnings */}
+																<td className="whitespace-nowrap px-3 py-4 text-sm font-mono text-gray-900 dark:text-white">
+																	{formatUSD(cred.earnings)}
+																</td>
+																{/* Added */}
+																<td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500 dark:text-gray-400">
+																	{formatDateTime(cred.addedAt)}
+																</td>
+																{/* Health */}
+																<td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+																	<HealthBadge status={cred.health} />
+																</td>
+																{/* Enabled */}
+																<td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
+																	<ToggleSwitch
+																		enabled={cred.isEnabled}
+																		onChange={(val) =>
+																			handleUpdateSettings(
+																				cred.id,
+																				val,
+																				cred.priceMultiplier,
+																			)
+																		}
+																		label={t(
+																			cred.isEnabled
+																				? "credentials.enabled_true"
+																				: "credentials.enabled_false",
+																		)}
+																	/>
+																</td>
+																{/* Actions */}
+																<td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
+																	<button
+																		type="button"
+																		onClick={() => handleDelete(cred.id)}
+																		className={`${TOKENS.red.text} ${TOKENS.red.textHover}`}
+																	>
+																		{t("common.delete")}
+																	</button>
+																</td>
+															</tr>
+														))}
+												</Fragment>
+											);
+										})
 									)}
 								</tbody>
 							</table>
@@ -1017,6 +1454,23 @@ export function Byok() {
 }
 
 // ─── Guidance Panel ─────────────────────────────────────
+
+function HealthBadgeCount({
+	status,
+	count,
+}: {
+	status: HealthStatus;
+	count: number;
+}) {
+	return (
+		<span className="inline-flex items-center gap-1">
+			<HealthBadge status={status} />
+			<span className="text-xs font-medium text-gray-600 dark:text-gray-300">
+				{count}
+			</span>
+		</span>
+	);
+}
 
 function GuidancePanel({
 	guide,

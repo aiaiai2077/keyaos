@@ -30,4 +30,5 @@ enabled = true
 head_sampling_rate = 1
 
 [triggers]
-crons = ["*/1 * * * *", "0 */6 * * *"]
+# Daily credential health checks run at 00:00 UTC.
+crons = ["*/1 * * * *", "0 */6 * * *", "0 0 * * *"]

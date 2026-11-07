@@ -14,6 +14,12 @@ import type { AppEnv } from "./types";
  */
 export const edgeCache = (ttl = 60) =>
 	createMiddleware<AppEnv>(async (c, next) => {
+		if (c.req.header("x-keyaos-cache-bypass") === "1") {
+			await next();
+			c.header("Cache-Control", "no-store");
+			return;
+		}
+
 		const cache = caches.default;
 		const key = new Request(c.req.url, { method: "GET" });
 
