@@ -283,8 +283,17 @@ interface PlatformOverview {
 	activeUsers: number;
 }
 
-function SyncButton({ label, endpoint }: { label: string; endpoint: string }) {
+function SyncButton({
+	label,
+	endpoint,
+	highlight = false,
+}: {
+	label: string;
+	endpoint: string;
+	highlight?: boolean;
+}) {
 	const { getToken } = useAuth();
+	const { t } = useTranslation();
 	const [state, setState] = useState<"idle" | "loading" | "done" | "error">(
 		"idle",
 	);
@@ -319,19 +328,24 @@ function SyncButton({ label, endpoint }: { label: string; endpoint: string }) {
 			type="button"
 			onClick={run}
 			disabled={state === "loading"}
-			className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:opacity-50 dark:border-white/10 dark:bg-white/5 dark:text-gray-300 dark:hover:bg-white/10"
+			title={label}
+			className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium shadow-sm transition disabled:opacity-50 ${
+				highlight
+					? "border-indigo-600 bg-indigo-600 text-white hover:bg-indigo-500"
+					: "border-gray-200 bg-white text-gray-700 hover:bg-gray-50 dark:border-white/10 dark:bg-white/5 dark:text-gray-300 dark:hover:bg-white/10"
+			}`}
 		>
 			<ArrowPathIcon
 				className={`size-3.5 ${state === "loading" ? "animate-spin" : ""}`}
 			/>
 			{state === "loading"
-				? "Syncing…"
+				? t("admin.syncing")
 				: state === "done"
 					? modelsSynced == null
 						? `✓ ${elapsed}ms`
-						: `✓ ${modelsSynced} models`
+						: `✓ ${t("admin.models_synced", { count: modelsSynced })}`
 					: state === "error"
-						? "✗ Failed"
+						? `✗ ${t("admin.sync_failed")}`
 						: label}
 		</button>
 	);
@@ -411,11 +425,12 @@ export function Overview() {
 						{t("admin.subtitle")}
 					</p>
 				</div>
-				<div className="flex items-center gap-2">
+				<div className="flex flex-wrap items-center gap-2">
 					<SyncButton label="Sync Models" endpoint="/api/admin/sync-models" />
 					<SyncButton
-						label="Sync Upstream"
+						label={t("admin.sync_upstream_models")}
 						endpoint="/api/admin/sync-upstream-models"
+						highlight
 					/>
 					<SyncButton label="Sync Candles" endpoint="/api/admin/sync-candles" />
 					<IconButton label="Refresh" size="md" onClick={refetch}>

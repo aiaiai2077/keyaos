@@ -64,30 +64,6 @@ export async function syncAllModels(
 				);
 			});
 
-		if (systemKey) {
-			try {
-				const models = await provider.fetchModels(cnyUsdRate, systemKey);
-				if (models.length > 0) return models;
-			} catch (error) {
-				log.warn("sync", "System-key model fetch failed", {
-					provider_id: provider.info.id,
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
-		}
-
-		if (!systemKey) {
-			try {
-				const models = await provider.fetchModels(cnyUsdRate);
-				if (models.length > 0) return models;
-			} catch (error) {
-				log.warn("sync", "Public model fetch failed", {
-					provider_id: provider.info.id,
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
-		}
-
 		let credentialAttempts = 0;
 		for (const credential of providerCredentials) {
 			try {
@@ -115,6 +91,28 @@ export async function syncAllModels(
 			log.warn("sync", "No models returned by stored credentials", {
 				provider_id: provider.info.id,
 				credential_attempts: credentialAttempts,
+			});
+		}
+
+		if (systemKey) {
+			try {
+				const models = await provider.fetchModels(cnyUsdRate, systemKey);
+				if (models.length > 0) return models;
+			} catch (error) {
+				log.warn("sync", "System-key model fetch failed", {
+					provider_id: provider.info.id,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		try {
+			const models = await provider.fetchModels(cnyUsdRate);
+			if (models.length > 0) return models;
+		} catch (error) {
+			log.warn("sync", "Public model fetch failed", {
+				provider_id: provider.info.id,
+				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 
